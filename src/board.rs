@@ -1,13 +1,17 @@
 use bevy::prelude::*;
 use bevy_mod_picking::*;
 
+use crate::pieces::*;
+
 pub struct BoardPlugin;
 impl Plugin for BoardPlugin {
     fn build(&self, app: &mut AppBuilder) {
         app.init_resource::<SelectedSquare>()
             .init_resource::<SquareMaterials>()
+            .init_resource::<SelectedPiece>()
             .add_startup_system(create_board.system())
-            .add_system(color_squares.system());
+            .add_system(color_squares.system())
+            .add_system(select_square.system());
     }
 }
 
@@ -24,6 +28,11 @@ impl Square {
 
 #[derive(Default)]
 struct SelectedSquare {
+    entity: Option<Entity>,
+}
+
+#[derive(Default)]
+struct SelectedPiece {
     entity: Option<Entity>,
 }
 
@@ -99,5 +108,49 @@ fn color_squares(
         } else {
             materials.black_color.clone()
         };
+    }
+}
+
+fn select_square(
+    pick_state: Res<PickState>,
+    mouse_button_inputs: Res<Input<MouseButton>>,
+    mut selected_square: ResMut<SelectedSquare>,
+    mut selected_piece: ResMut<SelectedPiece>,
+    squares_query: Query<&Square>,
+    mut pieces_query: Query<(Entity, &mut Piece)>,
+) {
+    //Only left button is selection
+    if !mouse_button_inputs.just_pressed(MouseButton::Left) {
+        return;
+    }
+
+    //If we have something already selcted
+    if let Some((square_entity, _intersection)) = pick_state.top(Group::default()) {
+        if let Ok(square) = squares_query.get(*square_entity) {
+            //Mark as selected
+            selected_square.entity = Some(*square_entity);
+
+            if let Some(selected_piece_entity) = selected_piece.entity {
+                //Move the piece
+                if let Ok((_piece_entity, mut piece)) = pieces_query.get_mut(selected_piece_entity)
+                {
+                    piece.x = square.x;
+                    piece.y = square.y;
+                }
+                selected_square.entity = None;
+                selected_piece.entity = None;
+            } else {
+                for (piece_entity, piece) in pieces_query.iter_mut() {
+                    if piece.x == square.x && piece.y == square.y {
+                        selected_piece.entity = Some(piece_entity);
+                        break;
+                    }
+                }
+            }
+        }
+    } else {
+        //Player clicked outside the board
+        selected_square.entity = None;
+        selected_piece.entity = None;
     }
 }
