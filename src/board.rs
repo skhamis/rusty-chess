@@ -5,16 +5,17 @@ use crate::pieces::*;
 
 pub struct BoardPlugin;
 impl Plugin for BoardPlugin {
-    fn build(&self, app: &mut AppBuilder) {
+    fn build(&self, app: &mut App) {
+        println!("Board build creation called");
         app.init_resource::<SelectedSquare>()
             .init_resource::<SquareMaterials>()
             .init_resource::<SelectedPiece>()
-            .add_startup_system(create_board.system())
+            .add_startup_system(create_board)
             .add_system(color_squares.system())
             .add_system(select_square.system());
     }
 }
-
+#[derive(Component)]
 struct Square {
     pub x: u8,
     pub y: u8,
@@ -43,9 +44,12 @@ struct SquareMaterials {
     black_color: Handle<StandardMaterial>,
 }
 
-impl FromResources for SquareMaterials {
-    fn from_resources(resources: &Resources) -> Self {
-        let mut materials = resources.get_mut::<Assets<StandardMaterial>>().unwrap();
+impl FromWorld for SquareMaterials {
+    fn from_world(world: &mut World) -> Self {
+        let world = world.cell();
+        let mut materials = world
+            .get_resource_mut::<Assets<StandardMaterial>>()
+            .unwrap();
         SquareMaterials {
             highlight_color: materials.add(Color::rgb(0.8, 0.3, 0.3).into()),
             selected_color: materials.add(Color::rgb(0.9, 0.1, 0.1).into()),
@@ -56,7 +60,7 @@ impl FromResources for SquareMaterials {
 }
 
 fn create_board(
-    commands: &mut Commands,
+    mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
     materials: Res<SquareMaterials>,
 ) {
@@ -67,9 +71,9 @@ fn create_board(
     for i in 0..8 {
         for j in 0..8 {
             commands
-                .spawn(PbrBundle {
+                .spawn_bundle(PbrBundle {
                     mesh: mesh.clone(),
-                    // Change material according to position to get alternating pattern
+                    //Change material according to position to get alternating pattern
                     material: if (i + j + 1) % 2 == 0 {
                         materials.white_color.clone()
                     } else {
@@ -78,23 +82,26 @@ fn create_board(
                     transform: Transform::from_translation(Vec3::new(i as f32, 0., j as f32)),
                     ..Default::default()
                 })
-                .with(PickableMesh::default())
-                .with(Square { x: i, y: j });
+                .insert_bundle(PickableBundle::default())
+                .insert(Square { x: i, y: j });
+            // println!("{:?}", mesh);
         }
     }
 }
 
 fn color_squares(
-    pick_state: Res<PickState>,
     selected_square: Res<SelectedSquare>,
     materials: Res<SquareMaterials>,
     mut query: Query<(Entity, &Square, &mut Handle<StandardMaterial>)>,
+    picking_camera_query: Query<&PickingCamera>,
 ) {
     //Get entity under cursor if avaialable
-    let top_entity = if let Some((entity, _intersection)) = pick_state.top(Group::default()) {
-        Some(*entity)
-    } else {
-        None
+    let top_entity = match picking_camera_query.iter().last() {
+        Some(picking_camera) => match picking_camera.intersect_top() {
+            Some((entity, _intersection)) => Some(entity),
+            None => None,
+        },
+        None => None,
     };
 
     for (entity, square, mut material) in query.iter_mut() {
@@ -112,12 +119,12 @@ fn color_squares(
 }
 
 fn select_square(
-    pick_state: Res<PickState>,
     mouse_button_inputs: Res<Input<MouseButton>>,
     mut selected_square: ResMut<SelectedSquare>,
     mut selected_piece: ResMut<SelectedPiece>,
     squares_query: Query<&Square>,
     mut pieces_query: Query<(Entity, &mut Piece)>,
+    picking_camera_query: Query<&PickingCamera>,
 ) {
     //Only left button is selection
     if !mouse_button_inputs.just_pressed(MouseButton::Left) {
@@ -125,25 +132,28 @@ fn select_square(
     }
 
     //If we have something already selcted
-    if let Some((square_entity, _intersection)) = pick_state.top(Group::default()) {
-        if let Ok(square) = squares_query.get(*square_entity) {
-            //Mark as selected
-            selected_square.entity = Some(*square_entity);
+    if let Some(picking_camera) = picking_camera_query.iter().last() {
+        if let Some((square_entity, _intersection)) = picking_camera.intersect_top() {
+            if let Ok(square) = squares_query.get(square_entity) {
+                //Mark as selected
+                selected_square.entity = Some(square_entity);
 
-            if let Some(selected_piece_entity) = selected_piece.entity {
-                //Move the piece
-                if let Ok((_piece_entity, mut piece)) = pieces_query.get_mut(selected_piece_entity)
-                {
-                    piece.x = square.x;
-                    piece.y = square.y;
-                }
-                selected_square.entity = None;
-                selected_piece.entity = None;
-            } else {
-                for (piece_entity, piece) in pieces_query.iter_mut() {
-                    if piece.x == square.x && piece.y == square.y {
-                        selected_piece.entity = Some(piece_entity);
-                        break;
+                if let Some(selected_piece_entity) = selected_piece.entity {
+                    //Move the piece
+                    if let Ok((_piece_entity, mut piece)) =
+                        pieces_query.get_mut(selected_piece_entity)
+                    {
+                        piece.x = square.x;
+                        piece.y = square.y;
+                    }
+                    selected_square.entity = None;
+                    selected_piece.entity = None;
+                } else {
+                    for (piece_entity, piece) in pieces_query.iter_mut() {
+                        if piece.x == square.x && piece.y == square.y {
+                            selected_piece.entity = Some(piece_entity);
+                            break;
+                        }
                     }
                 }
             }
